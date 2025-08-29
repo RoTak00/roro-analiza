@@ -1,5 +1,13 @@
 import json
 from pathlib import Path
+from collections import defaultdict
+from dataclasses import dataclass 
+
+@dataclass 
+class RoRoEntry: 
+    text: str
+    meta: dict 
+    doc: object | None = None
 
 class RoRoParser:
     """
@@ -42,10 +50,10 @@ class RoRoParser:
         self.force = False
         self.limit = None
 
-        self.__data = []
-        self.__errors = []
-        self.__spacy = []
+        self.__entries: list[RoRoEntry] = []
+        self.__entries_dirs = defaultdict(dict)
         self.__spacy_model = None
+        self.__errors = []
 
         if options:
             self.set(options)
@@ -61,25 +69,33 @@ class RoRoParser:
         return self
     
     def parse(self):
-        if self.__data != [] and not self.force:
+        if self.__entries != [] and not self.force:
             print("[err] Parser already parsed data")
             return
         
-        self.__data = []
-        self.__meta = []
-        self.__spacy = []
+        self.__entries = []
+        self.__entries_dirs = defaultdict(dict)
 
         for dirs, rel_path, fp in self.__iter_target_files():
-            if self.limit and len(self.__data) >= self.limit:
+            if self.limit and len(self.__entries) >= self.limit:
                 break
 
             text, meta = self.__safe_load_json(fp)
 
             meta.update({"rel_path": rel_path, "dirs": dirs})
 
-            self.__data.append(text)
-            self.__meta.append(meta)
+            entry = RoRoEntry(text=text, meta=meta)
 
+            self.__entries.append(entry)
+
+            # Creating nested dict
+            d = self.__entries_dirs
+            for dir in dirs[:-1]:
+                if dir not in d:
+                    d[dir] = {}
+                d = d[dir]
+
+            d.setdefault(dirs[-1], {})[rel_path] = entry
 
         if self.verbose:
             print("[info] Parsed data")
@@ -104,12 +120,68 @@ class RoRoParser:
         :param limit: The number of texts to print. Defaults to 5
         :type limit: int
         """
-        print(self.__data[:limit])
-        print(self.__meta[:limit])
+        print(self.__entries[:limit])
 
     def count_files(self):
-        return len(self.__data)
-        
+        return len(self.__entries)
+    
+    def get_flat(self):
+        return self.__entries
+    
+    def get(self, query=None):
+        """
+        Get the parsed entries (or subfolders) from the dataset.
+
+        - If query is None → return the whole tree (__entries_dirs)
+        - If query is a string → interpret as path (e.g. "politics/europe")
+        - If query is a list of paths → build a nested dict structure
+
+        :param query: subfolder(s) to get
+        :type query: None | str | list[str]
+        :return: dict[str, RoRoEntry] or nested dict of subfolders, or None if not found
+        """
+
+        if not self.__entries:
+            print("[err] Call parse() first")
+            return None
+
+        # Case 1: no query → return entire entries tree
+        if query is None:
+            return self.__entries_dirs
+
+        # Case 2: single path string
+        if isinstance(query, str):
+            return self.__get_dir(query)
+
+        # Case 3: list of queries → build nested dict
+        if isinstance(query, list):
+            result = {}
+            for q in query:
+                parts = q.split("/")
+                d = result
+                for part in parts[:-1]:
+                    d = d.setdefault(part, {})
+                d[parts[-1]] = self.__get_dir(q)
+            return result
+
+        print(f"[err] Unsupported query type: {type(query)}")
+        return None
+
+
+    def __get_dir(self, path: str):
+        """
+        Traverse __entries_dirs following a '/'-separated path.
+        Example: "politics/europe"
+        """
+        parts = path.split("/")
+        node = self.__entries_dirs
+        for p in parts:
+            if p not in node:
+                print(f"[err] Subfolder {p} not found in {path}")
+                return None
+            node = node[p]
+        return node
+
 
     def __iter_target_files(self):
         """
@@ -203,19 +275,20 @@ class RoRoParser:
         if self.verbose:
             print("[info] Creating SpaCy docs")
 
-        if self.__data == []:
+        if self.__entries == []:
             print("[err] Call parse() first")
             return
         
-        if self.__spacy != [] and not self.force:
+        if self.__entries[0].doc != None and not self.force:
             print("[err] SpaCy docs already created")
             return
         
         if not self.__spacy_model:
             self.__load_spacy()
 
-        for doc in self.__spacy_model.pipe(self.__data, batch_size=100, n_process=-1):
-            self.__spacy.append(doc)
+        texts = (e.text for e in self.__entries)
+        for entry, doc in zip(self.__entries, self.__spacy_model.pipe(texts, batch_size=100, n_process=-1)):
+            entry.doc = doc
 
         
         if self.verbose:

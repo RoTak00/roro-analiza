@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "roro_module"
+version = "0.1.0"
+description = "Romanian text parser / analyzer"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "spacy",
+]
+
+[tool.setuptools.packages.find]
+include = ["roro_module*"] 

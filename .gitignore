@@ -1,0 +1,24 @@
+# Python cache
+**/__pycache__/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Packaging / build
+*.egg-info/
+*.egg-info/*
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# VSCode / JetBrains
+.vscode/
+.idea/
+
+# System junk
+.DS_Store
+Thumbs.db
+
