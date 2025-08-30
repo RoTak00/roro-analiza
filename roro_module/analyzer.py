@@ -1,8 +1,10 @@
 import re
+import os
 import csv 
 import matplotlib.pyplot as plt
 from collections import defaultdict
 from pathlib import Path
+import importlib
 
 class RoRoAnalyzer:
     def __init__(self, parser):
@@ -10,36 +12,38 @@ class RoRoAnalyzer:
 
         self.cache = {}
 
-    def __flatten_dict(self, d):
-        items = []
-        for k, v in d.items():
-            if isinstance(v, dict):
-                items.extend(self.__flatten_dict(v))
-            else:
-                items.append(v)
-        return items
+    def run(self, analysis_name, query, uses_dict = False, **kwargs):
 
-    def run(self, func_name, query, uses_dict = True, **kwargs):
         """
-        Runs a given function with the given query and arguments
+        Run a named analysis on the parsed entries.
 
-        :param func_name: The name of the function to run
-        :param query: The query to pass to the parser
-        :param uses_dict: Whether the function expects a nested dict or a flat list of entries
-        :param **kwargs: Additional arguments to pass to the function
+        :param analysis_name: name of the analysis module (e.g. "dataset_statistics")
+        :param query: subfolder(s) to get (or None for all entries)
+        :param uses_dict: return a dict of entries or a flat list
+        :param **kwargs: additional keyword arguments to pass to the analysis module
 
-        :return: The result of the function
+        :return: result of the analysis (dict or scalar)
         """
-        func = getattr(self, func_name, None)
+        try:
+            module = importlib.import_module(f"roro_module.analysis.{analysis_name}")
+        except ImportError as e:
+            raise ValueError(f"Analysis module {analysis_name} not found: {e}")
+        
+         # assume each module exports one class with same name but CamelCase
+        class_name = "".join(part.capitalize() for part in analysis_name.split("_"))
+        if not class_name.startswith("RoRo"):
+            class_name = "RoRo" + class_name
 
-        if func is None:
-            raise ValueError(f"Function {func_name} not found")
+        cls = getattr(module, class_name, None)
+        if cls is None:
+            raise ValueError(f"Class {class_name} not found in module {analysis_name}")
+        
+        analysis_instance = cls()
 
-        entries = None 
+        # get entries
         if query is not None:
             entries = self.parser.get(query)
-
-            if uses_dict == False:
+            if not uses_dict:
                 entries = self.__flatten_dict(entries)
         elif uses_dict:
             entries = self.parser.get()
@@ -48,88 +52,24 @@ class RoRoAnalyzer:
 
         if entries is None:
             raise ValueError("No entries found")
-        
-        if not callable(func):
-            raise ValueError(f"Function {func_name} is not callable")
-        
-        result = func(entries, **kwargs)
+
+        result = analysis_instance.run(entries, **kwargs)
 
         self.cache = {
-            "name": func_name,
+            "name": analysis_name,
             "query": query,
-            "result": result
+            "result": result,
         }
-
         return result
     
-
-    __word_re = re.compile(r"\w+", flags=re.UNICODE)
-    def __text_len_words(self, s):
-        if not isinstance(s, str):
-            return 0, 0
-        s = s.strip()
-        return len(s), len(self.__word_re.findall(s))
-    
-    def __ancestors_with_gazeta(self, relative_parent, gazeta):
-        yield "(root)"
-        parts = list(relative_parent.parts)
-
-        acc = []
-        for p in parts:
-            acc.append(p)
-            yield "/".join(acc)
-
-        if gazeta:
-            yield "/".join(acc + [gazeta]) if acc else gazeta
-        
-    
-    def dataset_statistics(self, entries, **kwargs):
-        """
-        Computes statistics about the given dataset.
-
-        This function takes a list of entries and returns a dict with the following keys:
-
-        - `stats`: A nested dictionary with the following structure:
-            - `(root)`: A dict with keys `files`, `chars`, and `words` containing the total counts of the above.
-            - Each subfolder: A dict with keys `files`, `chars`, and `words` containing the total counts of the above for that subfolder.
-        - `processed`: The number of entries successfully processed
-        - `skipped`: The number of entries skipped due to errors
-
-        The function will count the number of files, characters, and words in each subfolder and the total, and return the results.
-        """
-        folder_stats = defaultdict(lambda: {"files": 0, "chars": 0, "words": 0})
-
-        processed, skipped = 0, 0
-
-        for entry in entries:
-            try:
-                content = entry.text
-                chars, words = self.__text_len_words(content)
-
-                rel_path = Path(entry.meta["rel_path"])
-                fname = rel_path.name
-                gazeta = fname.rsplit("_", 1)[0]
-                rel_parent = rel_path.parent
-
-                for cat in self.__ancestors_with_gazeta(rel_parent, gazeta):
-                    folder_stats[cat]["files"] += 1
-                    folder_stats[cat]["chars"] += chars
-                    folder_stats[cat]["words"] += words
-                processed += 1
-            except Exception as e:
-                print(f"[err] Failed to process {entry.meta.get('rel_path', '?')}: {e}")
-                skipped += 1
-
-        
-        enriched_stats = {}
-        for cat, vals in folder_stats.items():
-            level = 0 if cat == "(root)" else cat.count("/") + 1
-            enriched_stats[cat] = {
-                "level": level, 
-                **vals,
-            }
-
-        return {"stats": enriched_stats, "processed": processed, "skipped": skipped}
+    def __flatten_dict(self, d):
+        items = []
+        for k, v in d.items():
+            if isinstance(v, dict):
+                items.extend(self.__flatten_dict(v))
+            else:
+                items.append(v)
+        return items
             
         
     def save_csv(self, out_csv="analysis.csv"):
@@ -177,3 +117,47 @@ class RoRoAnalyzer:
                 w.writerow(row)
 
         print(f"[Analyzer] Saved CSV -> {out_csv}")
+
+        return 
+    
+    def plot(self, out_prefix="analysis", plots_dir="plots", **kwargs):
+        if not self.cache:
+            print("[err] Nothing in cache")
+            return
+
+        result = self.cache["result"]
+        if "stats" not in result:
+            print("[err] Cache does not contain folder stats")
+            return
+        
+        stats = result["stats"]
+        
+        if not isinstance(stats, dict) or not all(isinstance(v, dict) for v in stats.values()):
+            print("[err] Statistics is not a dict-of-dicts; cannot plot")
+            return
+
+        # collect all field names across all inner dicts
+        all_fields = set()
+        for v in stats.values():
+            all_fields.update(v.keys())
+        all_fields = sorted(all_fields)
+
+        os.makedirs(plots_dir, exist_ok=True)
+
+        for field in all_fields:
+            labels = list(stats.keys())
+            values = [v.get(field, 0) for v in stats.values()]
+
+            plt.figure(figsize=(12, 6))
+            plt.bar(labels, values)
+            plt.xticks(rotation=45)
+            plt.title(f"{field} per folder")
+            plt.xlabel("Folder")
+            plt.ylabel(field)
+            plt.tight_layout()
+
+            filename = f"{plots_dir}/{out_prefix}_{field}.png"
+            plt.savefig(filename)
+            plt.close()
+
+            print(f"[Analyzer] Saved plot -> {filename}")

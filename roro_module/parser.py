@@ -110,6 +110,7 @@ class RoRoParser:
 
         if self.verbose:
             print("[info] Finished parsing")
+            print(f"[info] Found {self.count_files()} entries")
 
         return self
     
