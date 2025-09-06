@@ -24,3 +24,5 @@ build/
 .DS_Store
 Thumbs.db
 
+roro_bert_out/** 
+

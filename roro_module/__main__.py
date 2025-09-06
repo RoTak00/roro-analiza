@@ -58,6 +58,21 @@ def Classifiers():
 
     analyzer.save_csv('regiuni-ro-only-functional')
 
+
+def ClassifiersBERT():
+    
+    parser = RoRoParser({'path': 'ignore/data-work', 'verbose': True, 'use_spacy': False, 'spacy_model_name': 'ro_core_news_sm'})
+
+    parser.parse()
+
+    analyzer = RoRoAnalyzer(parser)
+
+    result = analyzer.run('bert_classifier', None, False, level=0, model_name="readerbench/RoBERT-small", fp16=False, max_length=128, freeze_encoder=True)
+
+    print(result)
+
+    analyzer.save_csv('ro-md-small')
+
 if __name__ == "__main__":
-    Classifiers()
+    ClassifiersBERT()
 

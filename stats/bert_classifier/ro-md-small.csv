@@ -1,0 +1,2 @@
+key,accuracy,level_used,memory_mb_after,memory_mb_before,model_name,num_labels,processed,roc_auc
+result,0.7681630882671872,0,1529.2,1496.7,readerbench/RoBERT-small,2,23054,0.8476837057991375
