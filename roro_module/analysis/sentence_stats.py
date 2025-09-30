@@ -2,6 +2,8 @@ from collections import defaultdict, Counter
 from pathlib import Path
 import spacy
 import gc
+import math
+import statistics
 
 class RoRoSentenceStats:
 
@@ -47,40 +49,62 @@ class RoRoSentenceStats:
         return sent_lengths, punct_counts, stop_counts, pron_counts, unique_pct
     
     def _aggregate_results(self, folder_sentence_data, folder_unique_data):
+
         """
-        Given two dictionaries, `folder_sentence_data` and `folder_unique_data`, where each value is a dictionary with
-        the following keys:
+        Aggregate sentence statistics from a given folder of sentence data
+        and a given folder of unique word statistics.
 
-        - `lengths`: list of sentence lengths
-        - `puncts`: list of sentence punctuation counts
-        - `stops`: list of sentence stop word counts
-        - `prons`: list of sentence pronoun counts
-
-        and `folder_unique_data` has the same structure but with unique word percentage values.
-
-        Returns a dictionary with the same keys as `folder_sentence_data`, where each value is a dictionary with the
-        following keys:
-
-        - `avg_words_per_sentence`: average sentence length
-        - `avg_punct_per_sentence`: average sentence punctuation count
-        - `avg_stop_per_sentence`: average sentence stop word count
-        - `avg_pronoun_per_sentence`: average sentence pronoun count
-        - `avg_unique_word_pct`: average unique word percentage
-
-        Each value is calculated as the average of the corresponding list of values in the input dictionaries.
-        If a list is empty, the corresponding value is set to 0.0.
+        :param folder_sentence_data: a dictionary of sentence statistics
+        :param folder_unique_data: a dictionary of unique word statistics
+        :return: a dictionary of aggregated statistics
         """
+        def mean(values):
+            return sum(values) / len(values) if values else 0.0
+
+        def std(values, m=None):
+            if not values:
+                return 0.0
+            if m is None:
+                m = mean(values)
+            return math.sqrt(sum((x - m) ** 2 for x in values) / len(values))
+
+        def median(values):
+            return statistics.median(values) if values else 0.0
+
         result = {}
         for folder, data in folder_sentence_data.items():
-            # unpack arrays
-            lengths, puncts, stops, prons = data["lengths"], data["puncts"], data["stops"], data["prons"]
+            lengths = data["lengths"]
+            puncts = data["puncts"]
+            stops = data["stops"]
+            prons = data["prons"]
+            uniques = folder_unique_data[folder]
+
+            mean_lengths = mean(lengths)
+            mean_puncts = mean(puncts)
+            mean_stops = mean(stops)
+            mean_prons = mean(prons)
+            mean_uniques = mean(uniques)
 
             result[folder] = {
-                "avg_words_per_sentence": sum(lengths) / len(lengths) if lengths else 0.0,
-                "avg_punct_per_sentence": sum(puncts) / len(puncts) if puncts else 0.0,
-                "avg_stop_per_sentence": sum(stops) / len(stops) if stops else 0.0,
-                "avg_pronoun_per_sentence": sum(prons) / len(prons) if prons else 0.0,
-                "avg_unique_word_pct": sum(folder_unique_data[folder]) / len(folder_unique_data[folder]) if folder_unique_data[folder] else 0.0,
+                "words_per_sentence_mean": mean_lengths,
+                "words_per_sentence_std": std(lengths, mean_lengths),
+                "words_per_sentence_median": median(lengths),
+
+                "punct_per_sentence_mean": mean_puncts,
+                "punct_per_sentence_std": std(puncts, mean_puncts),
+                "punct_per_sentence_median": median(puncts),
+
+                "stop_per_sentence_mean": mean_stops,
+                "stop_per_sentence_std": std(stops, mean_stops),
+                "stop_per_sentence_median": median(stops),
+
+                "pronoun_per_sentence_mean": mean_prons,
+                "pronoun_per_sentence_std": std(prons, mean_prons),
+                "pronoun_per_sentence_median": median(prons),
+
+                "unique_word_pct_mean": mean_uniques,
+                "unique_word_pct_std": std(uniques, mean_uniques),
+                "unique_word_pct_median": median(uniques),
             }
         return result
     

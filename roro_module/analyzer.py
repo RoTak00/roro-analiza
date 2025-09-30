@@ -169,7 +169,7 @@ class RoRoAnalyzer:
             plt.ylabel(field)
             plt.tight_layout()
 
-            filename = f"{plots_dir}/{self.cache['name']}/{out_prefix}_{field}.png"
+            filename = f"{plots_dir}/{self.cache['name']}/{out_prefix}/{field}.png"
 
             # if the folders do not exist, create it
             os.makedirs(os.path.dirname(filename), exist_ok=True)
