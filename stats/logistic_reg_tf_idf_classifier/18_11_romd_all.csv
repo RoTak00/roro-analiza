@@ -1,0 +1,2 @@
+key,Moldova,Romania,accuracy,balanced_accuracy,level_used,mcc,processed,roc_auc
+result,"cahul, moldova, balti, soroca, orhei, ungheni, raionul, calarasi, md, chisinau","valcea, judetului, romania, bacau, ro, romaniei, olt, vaslui, judetul, judetean",0.9824333116460637,0.9748440697019708,0,0.9545424508771045,23054,0.9975016719374931

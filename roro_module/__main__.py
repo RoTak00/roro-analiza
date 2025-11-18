@@ -77,6 +77,21 @@ def ClassifiersBERT():
 
     analyzer.save_csv_matrix('ro_md')
 
+def StatsClassifiers():
+    parser = RoRoParser({'path': 'ignore/data-work/', 'verbose': True, 'use_spacy': False, 'spacy_model_name': 'ro_core_news_sm'})
+
+    parser.parse()
+
+    analyzer = RoRoAnalyzer(parser)
+
+    result = analyzer.run('sentence_stats_classifier', None, False, level=0, verbose=False)
+
+    print(result)
+
+    analyzer.save_csv('18_11_romd')
+
+    analyzer.save_csv_matrix('18_11_romd')
+
 if __name__ == "__main__":
-    Classifiers()
+    StatsClassifiers()
 
