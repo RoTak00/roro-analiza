@@ -26,8 +26,9 @@ Thumbs.db
 
 roro_bert_out/** 
 
-stats/*
-plots/*
-data/*
-data-cleaned/*
+stats/
+plots/
+data/
+data-cleaned/
+
 *.zip
