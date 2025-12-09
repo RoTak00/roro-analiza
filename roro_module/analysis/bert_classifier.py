@@ -5,7 +5,7 @@ from collections import defaultdict
 import os, psutil
 import numpy as np
 
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import classification_report, accuracy_score, balanced_accuracy_score, matthews_corrcoef, roc_auc_score
 from sklearn.metrics import confusion_matrix
@@ -92,10 +92,16 @@ class RoRoBertClassifier:
             X.append(text); y.append(folder)
             label_counts[folder] += 1
         return X, y, dict(label_counts)
-
+    
     def run(self, entries, **kwargs):
+        cv_folds = kwargs.get("cv_folds", None)
 
-        # Allow overrides via analyzer.run kwargs
+        if cv_folds is None or cv_folds < 2:
+            return self._run_single_split(entries, **kwargs)
+        else:
+            return self._run_cross_validation(entries, **kwargs)
+        
+    def _prepare_common(self, entries, **kwargs): 
         self.level      = kwargs.get("level", self.level)
         model_name      = kwargs.get("model_name",   self.cfg.model_name)
         max_length      = kwargs.get("max_length",   self.cfg.max_length)
@@ -106,10 +112,10 @@ class RoRoBertClassifier:
         fp16            = kwargs.get("fp16",         self.cfg.fp16 and torch.cuda.is_available())
         logging_steps   = kwargs.get("logging_steps",self.cfg.logging_steps)
         output_dir      = kwargs.get("output_dir",   self.cfg.output_dir)
-        freeze_encoder  = kwargs.get("freeze_encoder", False)  # optional speedup on CPU
+        freeze_encoder  = kwargs.get("freeze_encoder", False) # optional speedup on CPU
 
         random_state = kwargs.get("random_state", 42)
-        test_size = kwargs.get("test_size", 0.2)
+        test_size    = kwargs.get("test_size", 0.2) 
 
         X, y_raw, label_counts = self._extract_xy(entries)
         if len(set(y_raw)) < 2:
@@ -123,30 +129,13 @@ class RoRoBertClassifier:
         self.label_order_ = list(self.label_encoder.classes_)
         num_labels = len(self.label_order_)
 
-        # Split
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state, stratify=y
-        )
 
-        
-        # Tokenizer & datasets
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        ds_train = _SimpleTextDataset(X_train, y_train, self.tokenizer, max_length)
-        ds_test  = _SimpleTextDataset(X_test,  y_test,  self.tokenizer, max_length)
         collator = DataCollatorWithPadding(self.tokenizer)
-        
         id2label = {i: lbl for i, lbl in enumerate(self.label_order_)}
         label2id = {v: k for k, v in id2label.items()}
 
-        # Model
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            model_name, num_labels=num_labels, id2label=id2label, label2id=label2id, problem_type="single_label_classification", use_safetensors=True
-        )
-
-        if freeze_encoder:
-            for p in self.model.base_model.parameters():
-                p.requires_grad = False
-
+        # Metrics for Trainer
         acc_metric = evaluate.load("accuracy")
         f1_metric  = evaluate.load("f1")
         try:
@@ -166,6 +155,78 @@ class RoRoBertClassifier:
                     prediction_scores=probs, references=labels, average="macro"
                 ))
             return out
+        
+        ctx = {
+            "X": X,
+            "y": y,
+            "y_raw": y_raw,
+            "label_counts": label_counts,
+            "num_labels": num_labels,
+            "model_name": model_name,
+            "max_length": max_length,
+            "batch_size": batch_size,
+            "num_epochs": num_epochs,
+            "lr": lr,
+            "weight_decay": weight_decay,
+            "fp16": fp16,
+            "logging_steps": logging_steps,
+            "output_dir": output_dir,
+            "freeze_encoder": freeze_encoder,
+            "random_state": random_state,
+            "test_size": test_size,
+            "collator": collator,
+            "id2label": id2label,
+            "label2id": label2id,
+            "compute_metrics": compute_metrics,
+        }
+        return ctx
+
+    def _run_single_split(self, entries, **kwargs):
+
+        ctx = self._prepare_common(entries, **kwargs)
+        if "error" in ctx:
+            return ctx
+        
+        X              = ctx["X"]
+        y              = ctx["y"]
+        label_counts   = ctx["label_counts"]
+        num_labels     = ctx["num_labels"]
+        model_name     = ctx["model_name"]
+        max_length     = ctx["max_length"]
+        batch_size     = ctx["batch_size"]
+        num_epochs     = ctx["num_epochs"]
+        lr             = ctx["lr"]
+        weight_decay   = ctx["weight_decay"]
+        fp16           = ctx["fp16"]
+        logging_steps  = ctx["logging_steps"]
+        output_dir     = ctx["output_dir"]
+        freeze_encoder = ctx["freeze_encoder"]
+        random_state   = ctx["random_state"]
+        test_size      = ctx["test_size"]
+        collator       = ctx["collator"]
+        id2label       = ctx["id2label"]
+        label2id       = ctx["label2id"]
+        compute_metrics = ctx["compute_metrics"]
+
+            
+        # Split
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=random_state, stratify=y
+        )
+
+
+        # Tokenizer & datasets
+        ds_train = _SimpleTextDataset(X_train, y_train, self.tokenizer, max_length)
+        ds_test  = _SimpleTextDataset(X_test,  y_test,  self.tokenizer, max_length)
+
+            # Model
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            model_name, num_labels=num_labels, id2label=id2label, label2id=label2id, problem_type="single_label_classification", use_safetensors=True
+        )
+
+        if freeze_encoder:
+            for p in self.model.base_model.parameters():
+                p.requires_grad = False
 
         # Training config
         args = TrainingArguments(
@@ -199,16 +260,10 @@ class RoRoBertClassifier:
             callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
         )
 
-        # Memory snapshot
-        proc = psutil.Process(os.getpid())
-        mem_before = proc.memory_info().rss / 1024**2
-
         trainer.train()
 
-        mem_after = proc.memory_info().rss / 1024**2
         eval_res = trainer.evaluate()
 
-        # sklearn-style report for parity with TF-IDF flow
         with torch.no_grad():
             logits = trainer.predict(ds_test).predictions
             preds = logits.argmax(1)
@@ -223,6 +278,7 @@ class RoRoBertClassifier:
             target_names=self.label_order_,
             output_dict=True, zero_division=0
         )
+
         acc = accuracy_score(y_test, preds)
         acc_bal = balanced_accuracy_score(y_test, preds)
         mcc = matthews_corrcoef(y_test, preds)
@@ -235,7 +291,6 @@ class RoRoBertClassifier:
             except Exception:
                 roc_auc = None
 
-        # keep structure similar to your TF-IDF version
         return {
             "stats": {
                 "result": {
@@ -245,11 +300,8 @@ class RoRoBertClassifier:
                     "balanced_accuracy": acc_bal,
                     "mcc": mcc,
                     "roc_auc": roc_auc,
-                    "memory_mb_before": round(mem_before, 1),
-                    "memory_mb_after": round(mem_after, 1),
                     "num_labels": num_labels,
                     "model_name": model_name,
-                    # BERT has no linear n-gram weights → no top_features here
                 }
             },
             "data": {
@@ -267,3 +319,209 @@ class RoRoBertClassifier:
                 "confusion_matrix_norm": cm_norm.tolist(),
             }
         }
+    
+
+    def _run_cross_validation(self, entries, **kwargs):
+
+        ctx = self._prepare_common(entries, **kwargs)
+        if "error" in ctx:
+            return ctx
+
+        cv_folds       = kwargs.get("cv_folds")
+        X              = ctx["X"]
+        y              = ctx["y"]
+        label_counts   = ctx["label_counts"]
+        num_labels     = ctx["num_labels"]
+        model_name     = ctx["model_name"]
+        max_length     = ctx["max_length"]
+        batch_size     = ctx["batch_size"]
+        num_epochs     = ctx["num_epochs"]
+        lr             = ctx["lr"]
+        weight_decay   = ctx["weight_decay"]
+        fp16           = ctx["fp16"]
+        logging_steps  = ctx["logging_steps"]
+        output_dir     = ctx["output_dir"]
+        freeze_encoder = ctx["freeze_encoder"]
+        random_state   = ctx["random_state"]
+        collator       = ctx["collator"]
+        id2label       = ctx["id2label"]
+        label2id       = ctx["label2id"]
+        compute_metrics = ctx["compute_metrics"]
+        
+        skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+
+        all_y_test = []
+        all_y_pred = []
+        all_probs = [] if num_labels == 2 else None
+        fold_metrics = []
+        last_eval_res = None
+        last_model = None
+
+        for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y), start = 1):
+            X_train = [X[i] for i in train_idx]
+            X_test = [X[i] for i in test_idx]
+            y_train = y[train_idx]
+            y_test = y[test_idx]
+
+            ds_train = _SimpleTextDataset(X_train, y_train, self.tokenizer, max_length)
+            ds_test  = _SimpleTextDataset(X_test,  y_test,  self.tokenizer, max_length)
+
+            # New model per fold
+            model = AutoModelForSequenceClassification.from_pretrained(
+                model_name,
+                num_labels=num_labels,
+                id2label=id2label,
+                label2id=label2id,
+                problem_type="single_label_classification",
+                use_safetensors=True,
+            )
+
+            if freeze_encoder:
+                for p in model.base_model.parameters():
+                    p.requires_grad = False
+
+            fold_output_dir = os.path.join(output_dir, f"fold_{fold_idx}")
+
+            args = TrainingArguments(
+                output_dir=fold_output_dir,
+                per_device_train_batch_size=batch_size,
+                per_device_eval_batch_size=batch_size,
+                num_train_epochs=num_epochs,
+                learning_rate=lr,
+                weight_decay=weight_decay,
+                eval_strategy="epoch",
+                save_strategy="epoch",
+                load_best_model_at_end=True,
+                metric_for_best_model="f1",
+                greater_is_better=True,
+                logging_steps=logging_steps,
+                fp16=bool(fp16),
+                warmup_ratio=0.1,
+                report_to=[],
+                dataloader_num_workers=4,
+                gradient_accumulation_steps=1,
+            )
+
+            trainer = Trainer(
+                model=model,
+                args=args,
+                train_dataset=ds_train,
+                eval_dataset=ds_test,
+                tokenizer=self.tokenizer,
+                data_collator=collator,
+                compute_metrics=compute_metrics,
+                callbacks=[EarlyStoppingCallback(early_stopping_patience=2)],
+            )
+
+            trainer.train()
+
+            last_eval_res = trainer.evaluate()
+            last_model = model
+
+            with torch.no_grad():
+                logits = trainer.predict(ds_test).predictions
+                preds = logits.argmax(1)
+
+            all_y_test.append(y_test)
+            all_y_pred.append(preds)
+
+            if num_labels == 2:
+                probs = torch.softmax(torch.tensor(logits), dim=1).numpy()[:, 1]
+                all_probs.append(probs)
+
+            acc = accuracy_score(y_test, preds)
+            acc_bal = balanced_accuracy_score(y_test, preds)
+            mcc = matthews_corrcoef(y_test, preds)
+
+            fold_metrics.append({
+                "fold": fold_idx,
+                "accuracy": acc,
+                "balanced_accuracy": acc_bal,
+                "mcc": mcc,
+                "n_test": int(len(y_test))
+            })
+
+            print(f"Fold {fold_idx}/{cv_folds}: {acc:.4f}, {acc_bal:.4f}, {mcc:.4f}")
+        
+        y_test_all = np.concatenate(all_y_test)
+        y_pred_all = np.concatenate(all_y_pred)
+
+        cm = confusion_matrix(y_test_all, y_pred_all, labels=list(range(num_labels)))
+        cm_norm = confusion_matrix(y_test_all, y_pred_all, normalize="true", labels=list(range(num_labels)))
+
+        report = classification_report(
+            y_test_all, y_pred_all,
+            labels=list(range(num_labels)),
+            target_names=self.label_order_,
+            output_dict=True,
+            zero_division=0,
+        )
+
+        accs = [m["accuracy"] for m in fold_metrics]
+        acc_bals = [m["balanced_accuracy"] for m in fold_metrics]
+        mccs = [m["mcc"] for m in fold_metrics]
+
+        roc_auc = None
+        if num_labels == 2 and all_probs:
+            probs_all = np.concatenate(all_probs)
+            try:
+                roc_auc = roc_auc_score(y_test_all, probs_all)
+            except Exception:
+                roc_auc = None
+
+        self.model = last_model
+        eval_res = last_eval_res
+
+        stats = {}
+
+        # One row per fold
+        for m in fold_metrics:
+            fold_key = f"fold_{m['fold']}"
+            stats[fold_key] = {
+                "fold": m["fold"],
+                "n_test": m["n_test"],
+                "accuracy": m["accuracy"],
+                "balanced_accuracy": m["balanced_accuracy"],
+                "mcc": m["mcc"],
+            }
+
+        # One aggregate row
+        stats["aggregate"] = {
+            "processed": len(X),
+            "level_used": self.level,
+            "accuracy_mean": float(np.mean(accs)),
+            "accuracy_std": float(np.std(accs)),
+            "balanced_accuracy_mean": float(np.mean(acc_bals)),
+            "balanced_accuracy_std": float(np.std(acc_bals)),
+            "mcc_mean": float(np.mean(mccs)),
+            "mcc_std": float(np.std(mccs)),
+            "roc_auc": roc_auc,
+            "num_labels": num_labels,
+            "model_name": model_name,
+            "cv_folds": cv_folds,
+        }
+
+        return {
+            "stats": stats,
+            "data": {
+                "classification_report": report,
+                "label_counts": label_counts,
+                "labels": self.label_order_,
+                "trainer_eval": eval_res,
+                "model": self.model,
+                "tokenizer": self.tokenizer,
+                "label_encoder": self.label_encoder,
+            },
+            "matrix": {
+                "labels": self.label_order_,
+                "confusion_matrix": cm.tolist(),
+                "confusion_matrix_norm": cm_norm.tolist(),
+            }
+        }
+
+       
+
+
+        
+
+        
