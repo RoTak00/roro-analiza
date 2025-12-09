@@ -166,6 +166,8 @@ class RoRoSentenceStatsClassifier:
 
         verbose = kwargs.get("verbose", False)
 
+        self._spacy_model_name = kwargs.get("spacy_model_name", self._spacy_model_name)
+
         X, Xdocs, y, label_counts = self._extract_xy(entries)
 
         if len(set(y)) < 2:
@@ -181,7 +183,6 @@ class RoRoSentenceStatsClassifier:
             X, Xdocs, y, test_size=self.test_size, random_state=self.random_state, stratify=y
         )
 
-        self._spacy_model = spacy.load(self._spacy_model_name)
 
         # Check if data has spacy already 
         if Xdocs_train[0] is not None:
@@ -196,6 +197,8 @@ class RoRoSentenceStatsClassifier:
             )
             print("Test: processed data with spacy")
         else:
+            self._spacy_model = spacy.load(self._spacy_model_name)
+            
             X_train_data = self._from_text(X_train)
             X_test_data = self._from_text(X_test, "Test")
 

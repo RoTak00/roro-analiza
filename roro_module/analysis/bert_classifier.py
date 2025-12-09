@@ -140,7 +140,7 @@ class RoRoBertClassifier:
 
         # Model
         self.model = AutoModelForSequenceClassification.from_pretrained(
-            model_name, num_labels=num_labels, id2label=id2label, label2id=label2id, problem_type="single_label_classification",
+            model_name, num_labels=num_labels, id2label=id2label, label2id=label2id, problem_type="single_label_classification", use_safetensors=True
         )
 
         if freeze_encoder:
