@@ -129,7 +129,7 @@ class RoRoAnalyzer:
             _write_csv(base_path + "_norm.csv", norm, "normalized confusion matrix")
             self.save_confusion_heatmap(out_csv+"_heatmap")
 
-    def save_confusion_heatmap(self, out_png="conf_matrix_heatmap"):
+    def save_confusion_heatmap(self, out_pdf="conf_matrix_heatmap"):
         if not self.cache:
             print("[err] Nothing in cache")
             return
@@ -151,12 +151,12 @@ class RoRoAnalyzer:
 
         base_path = f"stats/{self.cache['name']}"
         os.makedirs(base_path, exist_ok=True)
-        out_path = f"{base_path}/{out_png}.png"
+        out_path = f"{base_path}/{out_pdf}.pdf"
         if os.path.exists(out_path):
             i = 1
-            while os.path.exists(f"{base_path}/{out_png}-{i}.png"):
+            while os.path.exists(f"{base_path}/{out_pdf}-{i}.pdf"):
                 i += 1
-            out_path = f"{base_path}/{out_png}-{i}.png"
+            out_path = f"{base_path}/{out_pdf}-{i}.pdf"
 
         colors = [
             (1.0, 1.0, 1.0),        # white (low values)
@@ -187,7 +187,8 @@ class RoRoAnalyzer:
 
 
         plt.tight_layout()
-        plt.savefig(out_path, dpi=300)
+        
+        plt.savefig(out_path, dpi=300, format="pdf")
         print(f"[Analyzer] Saved confusion matrix heatmap -> {out_path}")
 
             
