@@ -53,6 +53,8 @@ class RoRoLogisticRegTfIdfClassifier:
         self._spacy_model_name = spacy_model
         self._spacy_model = None
 
+        self._doc_cache = {}
+
     def _folder_from_rel_path(self, rel_path, level):
         """
         Given a relative path and a level, return the corresponding folder name.
@@ -112,6 +114,9 @@ class RoRoLogisticRegTfIdfClassifier:
             if not text:
                 continue
 
+            if doc is not None:
+                self._doc_cache[text] = doc
+
             rel_path = e.meta.get("rel_path", "")
             folder = self._folder_from_rel_path(rel_path, self.level)
 
@@ -123,10 +128,17 @@ class RoRoLogisticRegTfIdfClassifier:
     
     def _function_word_analyzer (self, text):
 
-        if not self._spacy_model:
-            self._spacy_model = spacy.load(self._spacy_model_name)
+        doc = None 
+
+        if hasattr(self, "_doc_cache"):
+            doc = self._doc_cache.get(text)
         
-        doc = self._spacy_model(text) 
+        if doc is not None:
+            if not self._spacy_model:
+                self._spacy_model = spacy.load(self._spacy_model_name)
+            
+            doc = self._spacy_model(text)
+             
         for tok in doc:
             if tok.is_space or tok.is_punct:
                 continue
