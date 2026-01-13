@@ -476,7 +476,11 @@ class RoRoLogisticRegTfIdfClassifier:
         self.clf = pipe_full.named_steps["clf"]
 
         top_feats = self._top_features(k = 10)
-        top_feats_str = {k: ", ".join(v) for k, v in top_feats.items()}
+        # Implode the feature lists into strings
+        top_feats_str = {}
+        for label, feats in top_feats.items():
+            top_feats_str[f"{label}_pos"] = ", ".join(feats["pos"])
+            top_feats_str[f"{label}_neg"] = ", ".join(feats["neg"])
 
 
         stats = {}
